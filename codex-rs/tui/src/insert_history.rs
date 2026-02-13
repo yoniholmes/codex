@@ -42,7 +42,7 @@ where
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
     let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
     let wrapped_lines = wrapped.len() as u16;
-    let cursor_top = if area.bottom() < screen_size.height {
+    if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
         // Don't scroll it past the bottom of the screen.
         let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
@@ -62,13 +62,10 @@ where
         }
         queue!(writer, ResetScrollRegion)?;
 
-        let cursor_top = area.top().saturating_sub(1);
         area.y += scroll_amount;
         should_update_area = true;
-        cursor_top
-    } else {
-        area.top().saturating_sub(1)
-    };
+    }
+    let cursor_top = area.top().saturating_sub(1);
 
     // Limit the scroll region to the lines from the top of the screen to the
     // top of the viewport. With this in place, when we add lines inside this
@@ -526,5 +523,37 @@ mod tests {
                 cell.fgcolor()
             );
         }
+    }
+
+    #[test]
+    fn vt100_preserves_numbered_list_lines_when_new_history_inserts_above_shifted_viewport() {
+        let width: u16 = 60;
+        let height: u16 = 40;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        // Keep room below the viewport so insert_history_lines exercises the branch that shifts
+        // the viewport down before inserting history above it.
+        term.set_viewport_area(Rect::new(0, 20, width, 5));
+
+        let recommendations = (1..=10)
+            .map(|i| Line::from(format!("{i}. recommendation {i}")))
+            .collect::<Vec<_>>();
+        insert_history_lines(&mut term, recommendations)
+            .expect("Failed to insert recommendation lines in test");
+
+        insert_history_lines(&mut term, vec![Line::from("Follow-up question")])
+            .expect("Failed to insert follow-up line in test");
+
+        let rendered = term.backend().vt100().screen().contents();
+        for i in 1..=10 {
+            assert!(
+                rendered.contains(&format!("{i}. recommendation {i}")),
+                "expected recommendation {i} to remain visible after follow-up insert:\n{rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("Follow-up question"),
+            "expected follow-up line to be visible:\n{rendered}"
+        );
     }
 }
